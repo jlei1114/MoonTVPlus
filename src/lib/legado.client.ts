@@ -115,6 +115,31 @@ function encodeRuleParam(value: string) {
   return encodeURIComponent(value).replace(/%20/g, '+');
 }
 
+function encryptTongrenKeyword(plainText: string) {
+  const passphrase = 'zc89s30ipHG2Dw';
+  const key = Buffer.alloc(32);
+  const iv = Buffer.alloc(16);
+  Buffer.from(passphrase).copy(key);
+  Buffer.from(passphrase).copy(iv);
+  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+  return encodeURIComponent(Buffer.concat([cipher.update(String(plainText), 'utf8'), cipher.final()]).toString('base64'));
+}
+
+function decryptTongrenOpenUrl(encryptedBase64: string, num: string, source?: LegadoBookSourceRule) {
+  try {
+    const numStr = Buffer.from(String(num || ''), 'base64').toString('utf8');
+    const userAgent = (asObjectHeader(source?.header)['User-Agent'] || 'Mozilla/5.0 (Linux; Android 9) Mobile Safari/537.36').toLowerCase();
+    const key = Buffer.from(crypto.createHash('md5').update(userAgent + numStr).digest('hex'), 'utf8');
+    const encryptedData = Buffer.from(String(encryptedBase64 || ''), 'base64');
+    const iv = encryptedData.subarray(0, 16);
+    const data = encryptedData.subarray(16);
+    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+    return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
+  } catch {
+    return '';
+  }
+}
+
 function safeEvalTemplateExpression(expr: string, keyword: string, page: number) {
   const key = keyword;
   const searchTerms = keyword;
@@ -151,13 +176,35 @@ function runJsSnippet(code: string, context: Record<string, any>, timeout = 1000
     base64Encode: (value: unknown) => Buffer.from(String(value ?? ''), 'utf8').toString('base64'),
     base64Decode: (value: unknown) => Buffer.from(String(value ?? ''), 'base64').toString('utf8'),
     md5Encode: (value: unknown) => crypto.createHash('md5').update(String(value ?? '')).digest('hex'),
+    strToBytes: (value: unknown) => Buffer.from(String(value ?? ''), 'utf8'),
+    base64DecodeToByteArray: (value: unknown) => Buffer.from(String(value ?? ''), 'base64'),
     encodeURI: (value: unknown) => encodeURIComponent(String(value ?? '')),
     encodeURIComponent: (value: unknown) => encodeURIComponent(String(value ?? '')),
     put: (key: string, value: any) => { variableStore.set(key, value); return value; },
     get: (key: string) => variableStore.get(key),
+    log: () => undefined,
     htmlFormat: (value: unknown) => he.decode(String(value ?? '')).replace(/<br\s*\/?/gi, '\n').replace(/<[^>]+>/g, ''),
   };
-  const sandbox: Record<string, any> = { ...context, java, Buffer, JSON, String, Number, Math, Array, Object, console: { log: () => undefined } };
+  const cookie = {
+    removeCookie: () => undefined,
+    mapToCookie: (input: any) => typeof input === 'string' ? input : Array.isArray(input) ? input.join('; ') : '',
+  };
+  const sandbox: Record<string, any> = {
+    ...context,
+    java,
+    cookie,
+    Buffer,
+    JSON,
+    String,
+    Number,
+    Math,
+    Array,
+    Object,
+    encodeURIComponent,
+    encryptText: encryptTongrenKeyword,
+    openUrl: (encryptedText: string, num: string) => decryptTongrenOpenUrl(encryptedText, num, context.source),
+    console: { log: () => undefined },
+  };
   const body = code.replace(/^@js:/, '').trim();
   try {
     const script = new vm.Script(`(function(){ ${body}\n})()`);
@@ -195,6 +242,14 @@ function applyPutGetRules(rule: string, value: string) {
 function buildUrlFromTemplate(template: string, source: BookSource, keyword?: string, page = 1, baseOverride?: string) {
   const base = baseOverride || sourceBase(source);
   let raw = template || base;
+  if (raw.trim().startsWith('@js:')) {
+    if (/\/k-\{\{encryptText\(key\)\}\}-\{\{page\}\}\.html/.test(raw)) {
+      return `https://www.rrssk.com/k-${encryptTongrenKeyword(keyword || '')}-${page}.html`;
+    }
+    const evaluated = runJsSnippet(raw, { key: keyword || '', keyword: keyword || '', page, baseUrl: base, source: { ...(source.legado || {}), key: base } });
+    raw = evaluated || raw;
+    if (/,(\s*)\{/.test(raw)) return raw;
+  }
   raw = renderTemplateExpressions(raw, keyword || '', page);
   raw = raw
     .replace(/\{searchTerms\}/g, encodeRuleParam(keyword || ''))
@@ -203,6 +258,17 @@ function buildUrlFromTemplate(template: string, source: BookSource, keyword?: st
     .replace(/\{page\}/g, String(page))
     .replace(/\{pageIndex\}/g, String(page));
   return normalizeUrl(base, raw);
+}
+
+function stripRuleJsBlocks(rule?: string) {
+  return (rule || '').replace(/<js>[\s\S]*?<\/js>/gi, '').trim();
+}
+
+function applyRuleJsBlocks(raw: string, rule?: string) {
+  const blocks = Array.from((rule || '').matchAll(/<js>([\s\S]*?)<\/js>/gi));
+  for (const block of blocks) {
+    runJsSnippet(block[1], { src: raw, result: raw });
+  }
 }
 
 function parseJsonMaybe(value: string): any | null {
@@ -569,8 +635,21 @@ function selectXPath($: cheerio.CheerioAPI, root: cheerio.Cheerio<any>, rule: st
   return { nodes: parts.length ? root.find(parts.join(' ')) : root, attr };
 }
 
-function readValue($: cheerio.CheerioAPI, root: cheerio.Cheerio<any>, rule?: string, baseUrl?: string): string {
+function readValue($: cheerio.CheerioAPI, root: cheerio.Cheerio<any>, rule?: string, baseUrl?: string, jsContext?: Record<string, any>): string {
   for (const alternative of splitAlternatives(rule)) {
+    const jsIndex = alternative.indexOf('@js:');
+    if (jsIndex > 0) {
+      const selectorRule = alternative.slice(0, jsIndex).trim();
+      const jsRule = alternative.slice(jsIndex).trim();
+      const selected = readValue($, root, selectorRule, baseUrl, jsContext);
+      const transformed = runJsSnippet(jsRule, { ...(jsContext || {}), result: selected, src: selected, baseUrl });
+      if (transformed) {
+        if (/,(\s*)\{/.test(transformed)) return transformed;
+        return /^(?:https?:)?\/\//i.test(transformed) || transformed.startsWith('/') ? normalizeUrl(baseUrl || '', transformed) : transformed;
+      }
+      if (selected) return selected;
+      continue;
+    }
     const normalized = stripFilters(alternative);
     const getMatch = normalized.match(/^@get:\s*\{\s*([A-Za-z0-9_$-]+)\s*\}$/);
     if (getMatch) {
@@ -959,12 +1038,13 @@ function getEffectiveExploreRule(rule: LegadoBookSourceRule): LegadoRuleSearch |
 }
 
 function hasExplore(rule: LegadoBookSourceRule) {
-  return rule.enabledExplore !== false && parseExploreUrl(rule.exploreUrl).length > 0 && !!getEffectiveExploreRule(rule);
+  return rule.enabledExplore !== false && (!!rule.exploreUrl?.trim().startsWith('@js:') || parseExploreUrl(rule.exploreUrl).length > 0) && !!getEffectiveExploreRule(rule);
 }
 
 function parseExploreUrl(exploreUrl?: string): Array<{ title: string; template: string }> {
   const raw = (exploreUrl || '').trim();
   if (!raw) return [];
+  if (raw.startsWith('@js:')) return [];
   const json = parseJsonMaybe(raw);
   if (Array.isArray(json)) {
     return json
@@ -1003,6 +1083,24 @@ function buildExploreTargetUrl(source: BookSource, target: ExploreTarget) {
   return buildUrlFromTemplate(target.template, source, undefined, target.page);
 }
 
+async function resolveExploreCategories(source: BookSource, rule: LegadoBookSourceRule): Promise<Array<{ title: string; template: string }>> {
+  const raw = (rule.exploreUrl || '').trim();
+  if (!raw.startsWith('@js:')) return parseExploreUrl(raw);
+  try {
+    const html = await fetchText(source, sourceBase(source));
+    const $ = cheerio.load(html);
+    const categories = $('a[href^="/list"]').toArray().map((el) => {
+      const title = $(el).text().trim();
+      const href = ($(el).attr('href') || '').replace(/\/$/, '-{{page}}/');
+      return title && href ? { title, template: href } : null;
+    }).filter(Boolean) as Array<{ title: string; template: string }>;
+    if (categories.length > 0) return [{ title: '全部分类', template: '__group__:全部分类' }, ...categories];
+  } catch {
+    // 动态分类首页被源站拦截时，至少不要把 @js 当成分类项显示。
+  }
+  return [];
+}
+
 export class LegadoClient {
   async getSources(): Promise<BookSource[]> {
     const config = await resolveLegadoConfig();
@@ -1037,13 +1135,15 @@ export class LegadoClient {
     for (let page = 1; page <= DEFAULT_LEGADO_SEARCH_PAGES; page += 1) {
       const targetUrl = buildUrlFromTemplate(rule.searchUrl, source, q, page);
       const html = await fetchText(source, targetUrl);
+      applyRuleJsBlocks(html, rule.ruleSearch.bookList);
       if (page === 1 && rule.ruleSearch.checkKeyWord && !html.includes(rule.ruleSearch.checkKeyWord) && !html.includes(q)) {
         throw new Error('搜索结果校验失败');
       }
       let pageCount = 0;
       const json = parseJsonMaybe(html);
-      if (json && ruleIsJson(rule.ruleSearch.bookList)) {
-        const items = selectJsonItems(json, rule.ruleSearch.bookList);
+      const searchBookListRule = stripRuleJsBlocks(rule.ruleSearch.bookList);
+      if (json && ruleIsJson(searchBookListRule)) {
+        const items = selectJsonItems(json, searchBookListRule);
         pageCount = items.length;
         items.forEach((item) => {
           const detailHref = readJsonRule(item, rule.ruleSearch?.bookUrl, source, targetUrl);
@@ -1064,8 +1164,8 @@ export class LegadoClient {
             tags: readJsonRule(item, rule.ruleSearch?.kind, source, targetUrl).split(/[,，\s]+/).filter(Boolean),
           }));
         });
-      } else if (rule.ruleSearch.bookList.trim().startsWith(':')) {
-        const items = readAllInOneList(html, rule.ruleSearch.bookList);
+      } else if (searchBookListRule.trim().startsWith(':')) {
+        const items = readAllInOneList(html, searchBookListRule);
         pageCount = items.length;
         items.forEach((item) => {
           const detailHref = readRegexItem(item, rule.ruleSearch?.bookUrl, targetUrl);
@@ -1087,11 +1187,11 @@ export class LegadoClient {
         });
       } else {
         const $ = cheerio.load(html);
-        const items = selectElements($, $.root(), rule.ruleSearch.bookList);
+        const items = selectElements($, $.root(), searchBookListRule);
         pageCount = items.length;
         items.each((_, element) => {
           const root = $(element);
-          const detailHref = readValue($, root, rule.ruleSearch?.bookUrl, targetUrl);
+          const detailHref = readValue($, root, rule.ruleSearch?.bookUrl, targetUrl, { source: rule });
           const title = readValue($, root, rule.ruleSearch?.name, targetUrl);
           if (!title && !detailHref) return;
           const cover = readValue($, root, rule.ruleSearch?.coverUrl, targetUrl);
@@ -1137,7 +1237,7 @@ export class LegadoClient {
       return { sourceId: source.id, sourceName: source.name, title: source.name, href: href || source.url, entries: [], navigation: [] };
     }
 
-    const categories = parseExploreUrl(rule.exploreUrl);
+    const categories = await resolveExploreCategories(source, rule);
     const target = decodeExploreTarget(href) || null;
     const navigation = categories.map((item) => ({
       title: item.title,

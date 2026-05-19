@@ -74,6 +74,7 @@ export interface LegadoBookSourceRule {
   enabledExplore?: boolean;
   exploreUrl?: string;
   header?: string | Record<string, string>;
+  jsLib?: string;
   loginUrl?: string;
   searchUrl?: string;
   bookInfoUrl?: string;
