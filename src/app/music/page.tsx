@@ -413,6 +413,30 @@ export default function MusicPage() {
     { key: 'mg', label: '咪咕' },
   ];
 
+  const getSourceDisplayLabel = (source?: MusicSource | string, compact = true) => {
+    switch (normalizeSource(source)) {
+      case 'wy': return compact ? '网易' : '网易云';
+      case 'tx': return compact ? 'QQ' : 'QQ音乐';
+      case 'kw': return '酷我';
+      case 'kg': return '酷狗';
+      case 'mg': return '咪咕';
+    }
+  };
+
+  const SourcePill = ({
+    source,
+    className = '',
+  }: {
+    source?: MusicSource | string;
+    className?: string;
+  }) => (
+    <span
+      className={`inline-flex shrink-0 items-center rounded-lg border border-red-500/50 bg-red-500/20 px-2 py-0.5 text-[10px] font-medium leading-none text-red-400 ${className}`}
+    >
+      {getSourceDisplayLabel(source)}
+    </span>
+  );
+
   const buildStreamUrl = (song: Song, source: MusicSource, songQuality: MusicQuality) => {
     const params = new URLSearchParams({
       songId: song.id,
@@ -2525,9 +2549,7 @@ export default function MusicPage() {
             <div>
               <div className="flex items-center justify-between mb-6 border-b border-white/5 pb-2">
                 <h2 className="text-xs font-mono text-white/50 tracking-widest">排行榜</h2>
-                <span className="text-[10px] font-bold bg-white/10 px-2 py-0.5 rounded text-white">
-                  {getSourceLabel()}
-                </span>
+                <SourcePill source={currentSource} />
               </div>
               {playlists.length > 0 ? (
                 <div className="space-y-2">
@@ -2547,6 +2569,7 @@ export default function MusicPage() {
                             <div className="text-xs text-zinc-500 mt-1 truncate">{playlist.updateFrequency}</div>
                           ) : null}
                         </div>
+                        <SourcePill source={playlist.source || currentSource} />
                         <div className="text-zinc-500 shrink-0">
                           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
@@ -2575,6 +2598,7 @@ export default function MusicPage() {
                   <h2 className="text-xl font-bold text-white/80 tracking-tight truncate max-w-md">
                     {currentPlaylistTitle}
                   </h2>
+                  {songs[0]?.platform ? <SourcePill source={songs[0].platform} /> : null}
                   <span className="text-[10px] font-bold bg-white/10 px-2 py-0.5 rounded text-white shrink-0">
                     {songs.length} 首歌曲
                   </span>
@@ -2626,10 +2650,10 @@ export default function MusicPage() {
                       {song.artist}
                     </div>
                     <div
-                      className="text-xs text-zinc-600 col-span-1"
+                      className="col-span-1 flex items-center"
                       onClick={() => playSong(song, index)}
                     >
-                      {getSourceLabel()}
+                      <SourcePill source={song.platform} />
                     </div>
                     <div className="col-span-1 flex flex-col items-center justify-center gap-0.5 leading-none">
                       <button
@@ -2791,35 +2815,38 @@ export default function MusicPage() {
                         {userPlaylistSongs.map((song, index) => (
                           <div
                             key={`${song.platform}+${song.id}`}
-                            className="flex items-center gap-3 p-3 rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
+                            className="flex items-center gap-2 p-2.5 md:gap-3 md:p-3 rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
                           >
-                            <div className="text-zinc-500 dark:text-zinc-300 text-sm w-8 text-center">{index + 1}</div>
+                            <div className="text-zinc-500 dark:text-zinc-300 text-xs md:text-sm w-6 md:w-8 text-center shrink-0">{index + 1}</div>
                             {song.pic && (
                               <img
                                 src={song.pic}
                                 alt={song.name}
-                                className="w-12 h-12 rounded object-cover"
+                                className="w-10 h-10 md:w-12 md:h-12 rounded object-cover shrink-0"
                               />
                             )}
                             <div className="flex-1 min-w-0">
-                              <div className="font-medium truncate">{song.name}</div>
+                              <div className="flex items-center gap-2 min-w-0">
+                                <div className="font-medium truncate">{song.name}</div>
+                                <SourcePill source={song.platform || song.source} />
+                              </div>
                               <div className="text-sm text-zinc-400 truncate">{song.artist}</div>
                             </div>
                             <button
                               onClick={() => playSong(song, index)}
-                              className="text-zinc-500 hover:text-green-500 transition-colors p-2"
+                              className="text-zinc-500 hover:text-green-500 transition-colors p-1 md:p-2 shrink-0"
                               title="播放"
                             >
-                              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                              <svg className="w-4 h-4 md:w-5 md:h-5" fill="currentColor" viewBox="0 0 24 24">
                                 <path d="M8 5v14l11-7z" />
                               </svg>
                             </button>
                             <button
                               onClick={() => handleRemoveSongFromUserPlaylist(song)}
-                              className="text-zinc-500 hover:text-red-500 transition-colors p-2"
+                              className="text-zinc-500 hover:text-red-500 transition-colors p-1 md:p-2 shrink-0"
                               title="移除"
                             >
-                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <svg className="w-4 h-4 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                               </svg>
                             </button>
@@ -2896,9 +2923,10 @@ export default function MusicPage() {
                     </svg>
                   )}
                 </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <div className="text-sm font-bold text-white truncate">{currentSong.name}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <div className="min-w-0 truncate text-sm font-bold text-white">{currentSong.name}</div>
+                    <SourcePill source={currentSong.platform} className="hidden sm:inline-flex" />
                     {showStreamBuffering && (
                       <span className="hidden sm:inline-flex items-center gap-1 rounded-full bg-green-500/15 px-2 py-0.5 text-[10px] font-medium text-green-300">
                         <span className="h-2 w-2 rounded-full bg-green-400 animate-pulse" />
@@ -3065,7 +3093,10 @@ export default function MusicPage() {
                   <div className="hidden md:block w-full">
                     <VinylTurntable cover={currentSong.pic} title={currentSong.name} isPlaying={isPlaying} />
                   </div>
-                  <h2 className="text-base md:text-xl lg:text-2xl font-bold text-white text-center mb-1 line-clamp-2">{currentSong.name}</h2>
+                  <div className="mb-1 flex min-w-0 items-center justify-center gap-1.5">
+                    <h2 className="min-w-0 truncate text-center text-base md:text-xl lg:text-2xl font-bold text-white">{currentSong.name}</h2>
+                    <SourcePill source={currentSong.platform} />
+                  </div>
                   <p className="text-xs md:text-sm lg:text-base text-zinc-400 line-clamp-1 text-center">{currentSong.artist}</p>
                 </div>
               </div>
@@ -3421,10 +3452,13 @@ export default function MusicPage() {
                           )}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className={`text-sm font-medium truncate transition-colors ${
-                            index === playlistIndex ? 'text-green-400' : 'text-white group-hover:text-green-400'
-                          }`}>
-                            {song.name}
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className={`text-sm font-medium truncate transition-colors ${
+                              index === playlistIndex ? 'text-green-400' : 'text-white group-hover:text-green-400'
+                            }`}>
+                              {song.name}
+                            </div>
+                            <SourcePill source={song.platform} />
                           </div>
                           <div className="text-xs text-zinc-500 truncate">{song.artist}</div>
                         </div>
