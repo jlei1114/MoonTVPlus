@@ -34,7 +34,7 @@ const serverExternalPackages = [
   'xpath',
 ];
 
-// 仅在 Cloudflare 或非开发环境下排除 6b85c446 和 706b2fe 引入的 external 包；
+// 仅在开发环境或 Cloudflare 环境下排除 6b85c446 和 706b2fe 引入的 external 包；
 // 其它未来加入的 server external 包不受影响。
 const buildExcludedServerExternalPackages = [
   '@upstash/redis',
@@ -53,7 +53,7 @@ const buildExcludedServerExternalPackages = [
 const createNextConfig = (phase) => {
   const isDevelopment = phase === PHASE_DEVELOPMENT_SERVER || process.env.NODE_ENV === 'development';
   const effectiveServerExternalPackages =
-    isCloudflare || !isDevelopment
+    isDevelopment || isCloudflare
       ? serverExternalPackages.filter((pkg) => !buildExcludedServerExternalPackages.includes(pkg))
       : serverExternalPackages;
 
